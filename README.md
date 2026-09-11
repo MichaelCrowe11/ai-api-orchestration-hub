@@ -1,418 +1,74 @@
-# AI API Orchestration Hub
+# ai-api-orchestration-hub
 
-A production-ready, centralized platform for orchestrating and managing multiple AI API services with intelligent load balancing, failover, cost optimization, and caching.
+Fastify server in TypeScript that routes chat completion requests across the OpenAI, Anthropic, Google and Cohere SDKs with failover, cost tracking and optional Redis caching; it installs and starts, but the typecheck fails and two of three test suites do not load.
 
-## Features
+## Status
 
-- **Multi-Provider Support**: Seamlessly work with OpenAI, Anthropic (Claude), Google (Gemini), and Cohere APIs
-- **Intelligent Load Balancing**: Distribute requests across providers based on cost, performance, or availability
-- **Automatic Failover**: Built-in retry logic with automatic provider switching on failures
-- **Cost Management**: Track spending, set budgets, and optimize routing for cost efficiency
-- **Redis Caching**: Reduce costs and latency by caching similar requests
-- **Rate Limiting**: Protect your APIs with configurable rate limits
-- **Real-time Metrics**: Monitor performance, costs, and health across all providers
-- **TypeScript**: Fully typed for better developer experience
-- **Docker Support**: Easy deployment with Docker and docker-compose
+experimental
 
-## Quick Start
+One commit, dated 2025-11-11, on a branch named `claude/use-case-integration-011CV18s5qqf4g5f3AwYkr3B`, which is also the default branch. There is no `main` branch, no lockfile, no CI and no LICENSE file. On 2026-09-10 the code installed, built and served its health route, so it is kept as experimental rather than archived.
 
-### Prerequisites
+What does not work:
 
-- Node.js 20+
-- Docker and Docker Compose (optional)
-- Redis (optional, but recommended)
-- API keys for at least one provider
+- `npm run typecheck` exits 2 with 18 errors: 10 `TS2769` overload mismatches (pino logger calls in `src/index.ts`, `src/cache/index.ts`, `src/orchestration/orchestrator.ts`, `src/api/server.ts`, and the Anthropic client call in `src/providers/anthropic.ts`), 1 `TS2345` Fastify instance type mismatch in `src/api/server.ts`, and 7 `TS6133` unused parameters. `tsconfig.json` sets `noUnusedLocals` and `noUnusedParameters` but not `noEmitOnError`, so `npm run build` exits 2 and still writes `dist/`.
+- `npm test`: `src/cache/__tests__/cache.test.ts` and `src/orchestration/__tests__/orchestrator.test.ts` fail to compile under ts-jest for the same unused-variable errors. Only `src/monitoring/__tests__/metrics.test.ts` runs (6 tests, all pass).
+- No `package-lock.json`. Every `npm install` resolves fresh. `Dockerfile` runs `npm ci`, which needs a lockfile, so the Docker build fails as written.
+- Dependabot PR #1 (2026-02-03) proposes `fastify` 4.29.1 to 5.7.4, a major bump that nothing here has been tested against.
 
-### Installation
+## Install and first run
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd ai-api-orchestration-hub
+Run on 2026-09-10 with Node 26.5.0 and npm 11.17.0:
 
-# Install dependencies
-npm install
+    npm install
+    added 547 packages in 29s
 
-# Copy environment file
-cp .env.example .env
+    npm run typecheck
+    (18 errors, exit 2; see Status)
 
-# Edit .env and add your API keys
-nano .env
-```
+    npm run build
+    (exit 2; dist/ written anyway)
 
-### Configuration
+    npm test
+    Test Suites: 2 failed, 1 passed, 3 total
+    Tests:       6 passed, 6 total
 
-Edit `.env` file with your API keys:
+    PORT=3971 HOST=127.0.0.1 REDIS_ENABLED=false CACHE_ENABLED=false node dist/index.js
+    INFO: Cache is disabled
+    INFO: Orchestrator initialized
+    INFO: Server listening at http://127.0.0.1:3971
 
-```env
-OPENAI_API_KEY=sk-your-openai-key
-ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
-GOOGLE_API_KEY=your-google-key
-COHERE_API_KEY=your-cohere-key
-```
+    curl http://127.0.0.1:3971/health
+    {"status":"unhealthy","providers":{},"timestamp":"2026-09-11T06:57:40.677Z"}
 
-### Running Locally
+`unhealthy` is the expected answer with no provider keys set; `GET /v1/providers` returned `{"providers":[]}`.
 
-```bash
-# Development mode with hot reload
-npm run dev
+Not run: `docker build` and `docker-compose up` (the Dockerfile's `npm ci` has no lockfile to read; compose also starts Redis), `POST /v1/completions` (it calls a paid vendor and no key was set), `npm run lint`.
 
-# Build and run production
-npm run build
-npm start
-```
+## What runs today
 
-### Running with Docker
+- `npm install` from `package.json` (no lockfile; today it resolved `fastify@4.29.1`).
+- `node dist/index.js` after `npm run build`: `GET /health`, `GET /v1/providers`, `GET /v1/metrics`, `GET /` answer locally with no keys. `POST /v1/completions` exists in `src/api/routes.ts` and was not exercised.
+- `src/monitoring/__tests__/metrics.test.ts`: 6 passing tests for the metrics collector.
+- Provider adapters for `openai`, `anthropic`, `google` and `cohere` in `src/providers/`, enabled one by one when the matching `*_API_KEY` is set (`src/config/index.ts`). A load balancer in `src/orchestration/load-balancer.ts` and failover retries in `src/orchestration/orchestrator.ts` exist in code and were not exercised.
+- Two guides in `docs/` (`API_EXAMPLES.md`, `INTEGRATION_GUIDE.md`) and a `.env.example` listing every variable the config reads.
 
-```bash
-# Build and start all services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-The API will be available at `http://localhost:3000`
-
-## API Usage
-
-### Health Check
-
-```bash
-curl http://localhost:3000/health
-```
-
-### Create Completion
-
-```bash
-curl -X POST http://localhost:3000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "What is the capital of France?",
-    "maxTokens": 100,
-    "provider": "auto"
-  }'
-```
-
-### Using Messages Format
+## Roadmap
 
-```bash
-curl -X POST http://localhost:3000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "What is the capital of France?"}
-    ],
-    "maxTokens": 100
-  }'
-```
-
-### Cost-Optimized Request
-
-```bash
-curl -X POST http://localhost:3000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Explain quantum computing in simple terms",
-    "maxCost": 0.01,
-    "maxTokens": 500
-  }'
-```
-
-### Get Metrics
-
-```bash
-curl http://localhost:3000/v1/metrics
-```
-
-### List Providers
-
-```bash
-curl http://localhost:3000/v1/providers
-```
-
-## API Reference
-
-### POST /v1/completions
-
-Create a completion request.
-
-**Request Body:**
-
-```typescript
-{
-  prompt?: string;              // Text prompt (alternative to messages)
-  messages?: Array<{            // Chat messages (alternative to prompt)
-    role: 'system' | 'user' | 'assistant';
-    content: string;
-  }>;
-  model?: string;               // Specific model or 'auto' (default: 'auto')
-  provider?: string;            // 'openai' | 'anthropic' | 'google' | 'cohere' | 'auto'
-  maxTokens?: number;           // Maximum tokens to generate
-  temperature?: number;         // 0-2, controls randomness
-  topP?: number;                // 0-1, nucleus sampling
-  maxCost?: number;             // Maximum cost in dollars
-  metadata?: Record<string, unknown>; // Custom metadata
-}
-```
-
-**Response:**
-
-```typescript
-{
-  id: string;
-  provider: string;
-  model: string;
-  content: string;
-  usage: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  };
-  cost: number;
-  latency: number;
-  cached: boolean;
-  timestamp: string;
-}
-```
-
-### GET /health
-
-Health check endpoint. Returns status of all providers.
-
-### GET /v1/metrics
-
-Returns comprehensive metrics including:
-- Total requests and success/failure counts
-- Total cost and average latency
-- Cache hit rate
-- Per-provider statistics
-
-### GET /v1/providers
-
-Returns list of enabled providers and their health status.
-
-## Integration Examples
-
-### Node.js/TypeScript
-
-```typescript
-import axios from 'axios';
-
-const client = axios.create({
-  baseURL: 'http://localhost:3000',
-  headers: { 'Content-Type': 'application/json' }
-});
-
-async function getChatCompletion(prompt: string) {
-  const response = await client.post('/v1/completions', {
-    prompt,
-    maxTokens: 1000,
-    provider: 'auto' // Let the hub choose the best provider
-  });
-
-  return response.data;
-}
-
-// Usage
-const result = await getChatCompletion('Explain AI in simple terms');
-console.log(result.content);
-console.log(`Cost: $${result.cost.toFixed(4)}`);
-```
-
-### Python
-
-```python
-import requests
-
-def get_completion(prompt, max_tokens=1000):
-    response = requests.post(
-        'http://localhost:3000/v1/completions',
-        json={
-            'prompt': prompt,
-            'maxTokens': max_tokens,
-            'provider': 'auto'
-        }
-    )
-    return response.json()
-
-# Usage
-result = get_completion('Explain AI in simple terms')
-print(result['content'])
-print(f"Cost: ${result['cost']:.4f}")
-```
-
-### cURL
-
-```bash
-curl -X POST http://localhost:3000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Explain AI",
-    "maxTokens": 500
-  }'
-```
-
-## Configuration Options
-
-All configuration is done through environment variables:
-
-### Server Configuration
-- `PORT` - Server port (default: 3000)
-- `HOST` - Server host (default: 0.0.0.0)
-- `NODE_ENV` - Environment (development/production)
-
-### Provider API Keys
-- `OPENAI_API_KEY` - OpenAI API key
-- `ANTHROPIC_API_KEY` - Anthropic API key
-- `GOOGLE_API_KEY` - Google API key
-- `COHERE_API_KEY` - Cohere API key
-
-### Redis Configuration
-- `REDIS_HOST` - Redis host (default: localhost)
-- `REDIS_PORT` - Redis port (default: 6379)
-- `REDIS_PASSWORD` - Redis password
-- `REDIS_ENABLED` - Enable Redis caching (default: true)
-
-### Cache Settings
-- `CACHE_TTL` - Cache time-to-live in seconds (default: 3600)
-- `CACHE_ENABLED` - Enable caching (default: true)
-
-### Rate Limiting
-- `RATE_LIMIT_MAX` - Max requests per time window (default: 100)
-- `RATE_LIMIT_TIME_WINDOW` - Time window in ms (default: 60000)
-
-### Cost Management
-- `ENABLE_COST_TRACKING` - Track costs (default: true)
-- `MAX_COST_PER_REQUEST` - Max cost per request in dollars (default: 1.00)
-- `DAILY_BUDGET_LIMIT` - Daily budget limit in dollars (default: 100.00)
-
-### Load Balancing
-- `ENABLE_LOAD_BALANCING` - Enable load balancing (default: true)
-- `ENABLE_FAILOVER` - Enable automatic failover (default: true)
-- `FAILOVER_RETRY_ATTEMPTS` - Number of retry attempts (default: 3)
-- `FAILOVER_RETRY_DELAY` - Delay between retries in ms (default: 1000)
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Client Applications                      │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Fastify API Server                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Rate Limiter │  │     CORS     │  │   Helmet     │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Orchestration Engine                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │    Cache     │  │Load Balancer │  │   Metrics    │      │
-│  │   Manager    │  │              │  │  Collector   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┬─────────────┐
-           ▼               ▼               ▼             ▼
-    ┌──────────┐    ┌──────────┐    ┌──────────┐  ┌──────────┐
-    │  OpenAI  │    │ Anthropic│    │  Google  │  │  Cohere  │
-    │ Provider │    │ Provider │    │ Provider │  │ Provider │
-    └──────────┘    └──────────┘    └──────────┘  └──────────┘
-```
-
-## Load Balancing Strategies
-
-The orchestrator uses intelligent algorithms to select the best provider:
-
-1. **Cost-Optimized**: Selects the cheapest provider that meets requirements
-2. **Performance-Based**: Selects provider with lowest latency
-3. **Round-Robin**: Distributes requests evenly across providers
-4. **Auto**: Automatically selects based on current metrics and health
-
-## Failover Mechanism
-
-When a provider fails:
-1. Request is automatically retried with a different provider
-2. Up to 3 retry attempts by default
-3. Exponential backoff between retries
-4. Metrics track failure rates for intelligent routing
-
-## Monitoring
-
-The hub provides comprehensive metrics:
-
-- Request counts (total, successful, failed)
-- Cost tracking (per-request and total)
-- Latency measurements
-- Cache hit rates
-- Provider-specific statistics
-- Health status for each provider
-
-Access metrics at `/v1/metrics`
-
-## Development
-
-### Project Structure
-
-```
-ai-api-orchestration-hub/
-├── src/
-│   ├── api/              # API server and routes
-│   ├── cache/            # Caching layer
-│   ├── config/           # Configuration
-│   ├── monitoring/       # Logging and metrics
-│   ├── orchestration/    # Core orchestration logic
-│   ├── providers/        # Provider implementations
-│   ├── types/            # TypeScript types
-│   └── index.ts          # Entry point
-├── Dockerfile
-├── docker-compose.yml
-└── package.json
-```
-
-### Running Tests
-
-```bash
-npm test
-```
-
-### Linting
-
-```bash
-npm run lint
-npm run lint:fix
-```
-
-### Type Checking
-
-```bash
-npm run typecheck
-```
-
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Run linting and tests
-6. Submit a pull request
-
-## License
-
-MIT
-
-## Support
-
-For issues, questions, or contributions, please open an issue on GitHub.
+- Commit a `package-lock.json` so `npm ci` and the Dockerfile work.
+- Fix the 18 type errors, then make the two skipped test suites compile.
+- Decide on the fastify 5 bump in PR #1 and run the tests against it.
+- Add a LICENSE file that matches the `MIT` field in `package.json`.
+
+## Limits
+
+- Not a product. It is a one-commit scaffold that has never been merged, released or run against a live provider from this repository.
+- The per-token prices in `src/config/index.ts` (`costPer1kPromptTokens`, `costPer1kCompletionTokens`) are constants typed in 2025. They are not fetched from vendors. Do not use the cost tracker for billing or budgets.
+- Where a key is set, prompts and completions go to that vendor. No data handling promise is made. `@fastify/helmet` and `@fastify/rate-limit` are wired in; no security review has been done.
+- `.env.example`, `README.md` and `docs/` contain placeholder keys of the form `sk-your-openai-key-here`. They are not credentials.
+- The Redis cache path (`src/cache/index.ts`) was not run; `REDIS_ENABLED=false` was used today.
+
+## License and contact
+
+No license file. `package.json` says `MIT`; no `LICENSE` file backs it.
+
+Contact: michael@crowelogic.com
